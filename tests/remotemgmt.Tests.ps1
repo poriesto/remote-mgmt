@@ -18,6 +18,14 @@ Describe 'remotemgmt module exports' {
             'Find-KB-onRemotePC'
             'Remove-AppOnRemotePC'
             'Get-AppFromRemotePC'
+            'Disable-ServiceOnRemotePC'
+            'Start-ServiceOnRemotePC'
+            'Enable-ServiceOnRemotePC'
+            'Set-ServiceStartupTypeOnRemotePC'
+            'Get-ServiceStartupTypeOnRemotePC'
+            'Get-ServiceStatusOnRemotePC'
+            'Find-PCbyUser'
+            'Find-PCbyUserInDescription'
         )
 
         $actualFunctions = (Get-Command -Module remotemgmt -CommandType Function).Name
@@ -285,6 +293,53 @@ Describe 'Get-AppFromRemotePC' {
         Mock -ModuleName remotemgmt Invoke-Command { throw 'package lookup failed' }
 
         $result = Get-AppFromRemotePC -ComputerName 'pc01' -App 'Example App'
+
+        $result | Should -Be $false
+    }
+}
+
+Describe 'Find-PCbyUser' {
+    It 'returns the computer matching the LastLogonUser attribute' {
+        Mock -ModuleName remotemgmt Get-ADComputer {
+            [pscustomobject]@{ Name = 'pc01'; LastLogonUser = 'ivanov' }
+        }
+
+        $result = Find-PCbyUser -Username 'ivanov'
+
+        $result | Should -Be 'pc01'
+        Should -Invoke -CommandName Get-ADComputer -ModuleName remotemgmt -Times 1 -Exactly -ParameterFilter {
+            $Properties -contains 'LastLogonUser'
+        }
+    }
+
+    It 'returns false when the Active Directory search fails' {
+        Mock -ModuleName remotemgmt Get-ADComputer { throw 'Active Directory unavailable' }
+
+        $result = Find-PCbyUser -Username 'ivanov'
+
+        $result | Should -Be $false
+    }
+}
+
+Describe 'Find-PCbyUserInDescription' {
+    It 'returns computer names whose description contains the username' {
+        Mock -ModuleName remotemgmt Get-ADComputer {
+            [pscustomobject]@{ Name = 'pc01'; Description = 'Last logged-on user: ivanov' }
+            [pscustomobject]@{ Name = 'pc02'; Description = 'ivanov - office workstation' }
+        }
+
+        $result = @(Find-PCbyUserInDescription -Username 'ivanov')
+
+        $result | Should -Be @('pc01', 'pc02')
+        Should -Invoke -CommandName Get-ADComputer -ModuleName remotemgmt -Times 1 -Exactly -ParameterFilter {
+            $Properties -contains 'Description'
+        }
+    }
+
+    It 'returns false when the Active Directory search fails' {
+        Mock -ModuleName remotemgmt Get-ADComputer { throw 'Active Directory unavailable' }
+
+        $result = Find-PCbyUserInDescription -Username 'ivanov'
 
         $result | Should -Be $false
     }

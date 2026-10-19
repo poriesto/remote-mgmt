@@ -15,7 +15,7 @@
 - копирование файлов на удалённый компьютер;
 - просмотр локальных администраторов и файлов;
 - запуск программ на удалённой машине;
-- поиск компьютера по имени пользователя в домене;
+- поиск компьютера по имени пользователя через атрибут `LastLogonUser` или поле `Description` объекта компьютера;
 - работа с WSUS-агентом и служебными задачами обновлений.
 
 ## Ключевые функции модуля
@@ -38,6 +38,7 @@
 - `Get-ServiceStartupTypeOnRemotePC`
 - `Get-ServiceStatusOnRemotePC`
 - `Find-PCbyUser`
+- `Find-PCbyUserInDescription`
 
 ## Требования
 
@@ -55,7 +56,8 @@ Get-WinBuild -ComputerName PC01
 Get-LocalAdmin -ComputerName PC01
 Copy-ToRemotePC -ComputerName PC01 -SourcePath "C:\Temp\setup.msi" -RemotePath "C$\Temp"
 Start-ServiceOnRemotePC -ComputerName PC01 -ServiceName "wuauserv"
-Find-PCbyUser -UserName "ivanov"
+Find-PCbyUser -Username "ivanov" # ищет по атрибуту LastLogonUser
+Find-PCbyUserInDescription -Username "ivanov" # ищет "ivanov" в поле Description компьютера в Active Directory
 ```
 
 ## Назначение проекта

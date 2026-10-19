@@ -21,7 +21,8 @@
     Set-ServiceStartupTypeOnRemotePC - изменяет тип запуска службы на удаленном компьютере
     Get-ServiceStartupTypeOnRemotePC - получает тип запуска службы на удаленном компьютере
     Get-ServiceStatusOnRemotePC - получает статус службы на удаленном компьютере
-    Find-PCbyUser - ищет компьютер по имени пользователя в доменной инфраструктуре Active Directory
+    Find-PCbyUser - ищет компьютер по атрибуту LastLogonUser в Active Directory
+    Find-PCbyUserInDescription - ищет компьютер по имени пользователя в поле Description объекта Active Directory
 
 .NOTES
     Совместимость: Windows PowerShell 5.1, PowerShell 7+.
@@ -30,7 +31,7 @@
 
 .FUNCTIONS
     Remove-AppOnRemotePC, Find-KB-onRemotePC,Get-InstalledWindowsUpdate,Install-MsiOnRemotePC,Start-WsusAgentUpdate,
-    Get-WinBuild,Copy-ToRemotePC,Get-LocalAdmin,Get-LocalFile,Start-RemoteProgram,Disable-ServiceOnRemotePC,Start-ServiceOnRemotePC,Enable-ServiceOnRemotePC,Set-ServiceStartupTypeOnRemotePC,Get-ServiceStartupTypeOnRemotePC,Get-ServiceStatusOnRemotePC,Find-PCbyUser
+    Get-WinBuild,Copy-ToRemotePC,Get-LocalAdmin,Get-LocalFile,Start-RemoteProgram,Disable-ServiceOnRemotePC,Start-ServiceOnRemotePC,Enable-ServiceOnRemotePC,Set-ServiceStartupTypeOnRemotePC,Get-ServiceStartupTypeOnRemotePC,Get-ServiceStatusOnRemotePC,Find-PCbyUser,Find-PCbyUserInDescription
 #>
 
 function Copy-ToRemotePC {
@@ -374,4 +375,20 @@ function Find-PCbyUser {
     }
 }
 
-Export-ModuleMember -Function Copy-ToRemotePC, Get-LocalAdmin, Get-LocalFile, Start-RemoteProgram, Get-WinBuild, Get-InstalledWindowsUpdate, Install-MsiOnRemotePC, Find-KB-onRemotePC, Remove-AppOnRemotePC, Get-AppFromRemotePC, Disable-ServiceOnRemotePC, Start-ServiceOnRemotePC, Enable-ServiceOnRemotePC, Set-ServiceStartupTypeOnRemotePC, Get-ServiceStartupTypeOnRemotePC, Get-ServiceStatusOnRemotePC, Find-PCbyUser
+function Find-PCbyUserInDescription {
+    param (
+        [string]$Username
+    )
+    try {
+        $descriptionFilter = "*$Username*"
+        $computer = Get-ADComputer -Filter { Description -like $descriptionFilter } -Properties Description |
+            Select-Object -ExpandProperty Name
+        return $computer
+    }
+    catch {
+        Write-Warning "Ошибка при поиске компьютера для пользователя $Username : $_"
+        return $false
+    }
+}
+
+Export-ModuleMember -Function Copy-ToRemotePC, Get-LocalAdmin, Get-LocalFile, Start-RemoteProgram, Get-WinBuild, Get-InstalledWindowsUpdate, Install-MsiOnRemotePC, Find-KB-onRemotePC, Remove-AppOnRemotePC, Get-AppFromRemotePC, Disable-ServiceOnRemotePC, Start-ServiceOnRemotePC, Enable-ServiceOnRemotePC, Set-ServiceStartupTypeOnRemotePC, Get-ServiceStartupTypeOnRemotePC, Get-ServiceStatusOnRemotePC, Find-PCbyUser, Find-PCbyUserInDescription
