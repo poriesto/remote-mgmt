@@ -1,20 +1,23 @@
 <#
 .SYNOPSIS
-    Модуль управление компьютерами и серверами в доменной инфраструктуре Active Directory
+    Модуль для удаленного управления компьютерами и серверами в доменной инфраструктуре Active Directory
 .DESCRIPTION
     Модуль предоставляет функции для управления компьютерами и серверами в доменной инфраструктуре Active Directory:
+    Вызовы публичных функций журналируются вместе с параметрами и результатом выполнения.
     
     Remove-AppOnRemotePC - удаляет приложение на удаленном компьютере
     Find-KB-onRemotePC - ищет установленный KB на удаленном компьютере
-    Get-InstalledWindowsUpdate - получает список установленных обновлений на удаленном компьютере
+    Get-InstalledWindowsUpdate - получает названия пакетов обновлений, подходящих под заданные фильтры
+    Install-WindowsUpdateOnRemotePC - копирует локальный MSU-файл на удаленный компьютер и устанавливает его
+    Install-WindowsUpdateFromRepositoryOnRemotePC - устанавливает MSU-файл из централизованного хранилища
     Install-MsiOnRemotePC - устанавливает MSI пакет на удаленном компьютере
-    Start-WsusAgentUpdate - запускает обновление WSUS агента на удаленном компьютере
+    Start-WsusAgent - инициирует поиск обновлений через клиент Windows Update на удаленном компьютере
     Get-WinBuild - получает версию сборки Windows на удаленном компьютере
     Copy-ToRemotePC - копирует файл на удаленный компьютер
     Get-LocalAdmin - получает список локальных администраторов на удаленном компьютере
-    Get-LocalFile - получает список локальных файлов на удаленном компьютере
+    Get-LocalFile - получает сведения о версии указанного файла на удаленном компьютере
     Start-RemoteProgram - запускает программу на удаленном компьютере
-    Get-AppFromRemotePC - получает список установленных приложений на удаленном компьютере
+    Get-AppFromRemotePC - получает название и версию указанного приложения на удаленном компьютере
     Disable-ServiceOnRemotePC - отключает службу на удаленном компьютере
     Start-ServiceOnRemotePC - запускает службу на удаленном компьютере
     Enable-ServiceOnRemotePC - включает службу на удаленном компьютере
@@ -30,8 +33,11 @@
     Дата: 2026-10-08
 
 .FUNCTIONS
-    Remove-AppOnRemotePC, Find-KB-onRemotePC,Get-InstalledWindowsUpdate,Install-MsiOnRemotePC,Start-WsusAgentUpdate,
-    Get-WinBuild,Copy-ToRemotePC,Get-LocalAdmin,Get-LocalFile,Start-RemoteProgram,Disable-ServiceOnRemotePC,Start-ServiceOnRemotePC,Enable-ServiceOnRemotePC,Set-ServiceStartupTypeOnRemotePC,Get-ServiceStartupTypeOnRemotePC,Get-ServiceStatusOnRemotePC,Find-PCbyUser,Find-PCbyUserInDescription
+    Copy-ToRemotePC, Get-LocalAdmin, Get-LocalFile, Start-RemoteProgram, Get-WinBuild, Get-InstalledWindowsUpdate,
+    Install-WindowsUpdateOnRemotePC, Install-WindowsUpdateFromRepositoryOnRemotePC, Install-MsiOnRemotePC,
+    Find-KB-onRemotePC, Remove-AppOnRemotePC, Get-AppFromRemotePC, Start-WsusAgent, Disable-ServiceOnRemotePC,
+    Start-ServiceOnRemotePC, Enable-ServiceOnRemotePC, Set-ServiceStartupTypeOnRemotePC,
+    Get-ServiceStartupTypeOnRemotePC, Get-ServiceStatusOnRemotePC, Find-PCbyUser, Find-PCbyUserInDescription
 #>
 
 function Copy-ToRemotePC {
@@ -153,7 +159,94 @@ function Get-InstalledWindowsUpdate
         return $false
     }
 }
-#Функция удаленной установки MSI пакета на АРМ или сервер
+
+function Install-WindowsUpdateFileOnRemotePC {
+    param (
+        [string]$ComputerName,
+        [string]$UpdatePath
+    )
+    try {
+        if ([System.IO.Path]::GetExtension($UpdatePath) -ne '.msu') {
+            throw "Ожидается автономный файл обновления с расширением .msu: $UpdatePath"
+        }
+        if (-not (Test-Path -LiteralPath $UpdatePath -PathType Leaf)) {
+            throw "Файл обновления не найден или недоступен: $UpdatePath"
+        }
+
+        $updateFileName = '{0}_{1}.msu' -f [guid]::NewGuid().ToString('N'), [System.IO.Path]::GetFileNameWithoutExtension($UpdatePath)
+        $remoteSharePath = "\\$ComputerName\C$\Windows\Temp\$updateFileName"
+        $remoteLocalPath = "C:\Windows\Temp\$updateFileName"
+        Copy-Item -LiteralPath $UpdatePath -Destination $remoteSharePath -Force -ErrorAction Stop
+
+        Invoke-Command -ComputerName $ComputerName -ArgumentList $remoteLocalPath -ScriptBlock {
+            param ($LocalUpdatePath)
+
+            try {
+                $installer = Start-Process -FilePath 'wusa.exe' `
+                    -ArgumentList "/quiet /norestart `"$LocalUpdatePath`"" `
+                    -Wait -PassThru -ErrorAction Stop
+
+                if ($installer.ExitCode -notin @(0, 3010, 2359302)) {
+                    throw "Windows Update Standalone Installer завершился с кодом $($installer.ExitCode)"
+                }
+                if ($installer.ExitCode -eq 3010) {
+                    Write-Warning 'Обновление установлено; для завершения установки требуется перезагрузка компьютера.'
+                }
+            }
+            finally {
+                Remove-Item -LiteralPath $LocalUpdatePath -Force -ErrorAction Stop
+            }
+        } -ErrorAction Stop
+
+        return $true
+    }
+    catch {
+        Write-Warning "Ошибка при установке обновления на компьютере $ComputerName из файла $UpdatePath : $_"
+        return $false
+    }
+}
+
+function Install-WindowsUpdateOnRemotePC {
+    param (
+        [string]$ComputerName,
+        [string]$UpdatePath
+    )
+    Install-WindowsUpdateFileOnRemotePC -ComputerName $ComputerName -UpdatePath $UpdatePath
+}
+
+function Install-WindowsUpdateFromRepositoryOnRemotePC {
+    param (
+        [string]$ComputerName,
+        [string]$RepositoryPath
+    )
+    Install-WindowsUpdateFileOnRemotePC -ComputerName $ComputerName -UpdatePath $RepositoryPath
+}
+
+function Start-WsusAgent {
+    param (
+        [string]$ComputerName
+    )
+    try {
+        Invoke-Command -ComputerName $ComputerName -ScriptBlock {
+            Start-Service -Name 'wuauserv' -ErrorAction Stop
+
+            $usoClientPath = Join-Path $env:SystemRoot 'System32\UsoClient.exe'
+            if (Test-Path -LiteralPath $usoClientPath) {
+                Start-Process -FilePath $usoClientPath -ArgumentList 'StartScan' -ErrorAction Stop
+            }
+            else {
+                Start-Process -FilePath 'wuauclt.exe' -ArgumentList '/detectnow' -ErrorAction Stop
+                Start-Process -FilePath 'wuauclt.exe' -ArgumentList '/reportnow' -ErrorAction Stop
+            }
+        } -ErrorAction Stop
+        return $true
+    }
+    catch {
+        Write-Warning "Ошибка при запуске поиска обновлений WSUS на компьютере $ComputerName : $_"
+        return $false
+    }
+}
+
 function Install-MsiOnRemotePC
 {
     param(
@@ -209,7 +302,7 @@ function Remove-AppOnRemotePC
         # Проверяем доступность компьютера
         if (Test-Connection -ComputerName $ComputerName -Count 1 -Quiet) 
         {
-            # Отключаем гибернацию через удаленное выполнение команды
+            # Удаляем указанный пакет на удаленном компьютере
             Invoke-Command -ComputerName $ComputerName -ScriptBlock {
                 Get-Package -Name $Using:App | Uninstall-Package
             } -ErrorAction Stop
@@ -391,4 +484,131 @@ function Find-PCbyUserInDescription {
     }
 }
 
-Export-ModuleMember -Function Copy-ToRemotePC, Get-LocalAdmin, Get-LocalFile, Start-RemoteProgram, Get-WinBuild, Get-InstalledWindowsUpdate, Install-MsiOnRemotePC, Find-KB-onRemotePC, Remove-AppOnRemotePC, Get-AppFromRemotePC, Disable-ServiceOnRemotePC, Start-ServiceOnRemotePC, Enable-ServiceOnRemotePC, Set-ServiceStartupTypeOnRemotePC, Get-ServiceStartupTypeOnRemotePC, Get-ServiceStatusOnRemotePC, Find-PCbyUser, Find-PCbyUserInDescription
+$script:RemoteMgmtLogLock = New-Object object
+
+function Write-RemoteMgmtLog {
+    param (
+        [string]$OperationId,
+        [string]$FunctionName,
+        [string]$ComputerName,
+        [string]$Target,
+        [System.Collections.IDictionary]$Parameters,
+        [ValidateSet('Started', 'Succeeded', 'Failed')]
+        [string]$Status,
+        [string]$Message
+    )
+
+    try {
+        $logPath = $env:REMOTEMGMT_LOG_PATH
+        if ([string]::IsNullOrWhiteSpace($logPath)) {
+            $logRoot = $env:ProgramData
+            if ([string]::IsNullOrWhiteSpace($logRoot)) {
+                $logRoot = [Environment]::GetFolderPath('LocalApplicationData')
+            }
+            if ([string]::IsNullOrWhiteSpace($logRoot)) {
+                $logRoot = $HOME
+            }
+            $logPath = Join-Path (Join-Path $logRoot 'RemoteMgmt') 'remote-mgmt.jsonl'
+        }
+
+        $logPath = [System.IO.Path]::GetFullPath($logPath)
+        $logDirectory = [System.IO.Path]::GetDirectoryName($logPath)
+        if ([string]::IsNullOrWhiteSpace($logDirectory)) {
+            $logDirectory = [Environment]::CurrentDirectory
+        }
+        [System.IO.Directory]::CreateDirectory($logDirectory) | Out-Null
+
+        $entry = [ordered]@{
+            TimestampUtc = [DateTime]::UtcNow.ToString('o')
+            OperationId  = $OperationId
+            Function     = $FunctionName
+            ComputerName = $ComputerName
+            Target       = $Target
+            Parameters   = $Parameters
+            Status       = $Status
+            Message      = $Message
+        }
+        $line = ($entry | ConvertTo-Json -Compress) + [Environment]::NewLine
+
+        [System.Threading.Monitor]::Enter($script:RemoteMgmtLogLock)
+        try {
+            [System.IO.File]::AppendAllText(
+                $logPath,
+                $line,
+                ([System.Text.UTF8Encoding]::new($false))
+            )
+        }
+        finally {
+            [System.Threading.Monitor]::Exit($script:RemoteMgmtLogLock)
+        }
+    }
+    catch {
+        Write-Warning "Не удалось записать журнал remote-mgmt: $_"
+    }
+}
+
+$publicFunctions = @(
+    'Copy-ToRemotePC'
+    'Get-LocalAdmin'
+    'Get-LocalFile'
+    'Start-RemoteProgram'
+    'Get-WinBuild'
+    'Get-InstalledWindowsUpdate'
+    'Install-WindowsUpdateOnRemotePC'
+    'Install-WindowsUpdateFromRepositoryOnRemotePC'
+    'Start-WsusAgent'
+    'Install-MsiOnRemotePC'
+    'Find-KB-onRemotePC'
+    'Remove-AppOnRemotePC'
+    'Get-AppFromRemotePC'
+    'Disable-ServiceOnRemotePC'
+    'Start-ServiceOnRemotePC'
+    'Enable-ServiceOnRemotePC'
+    'Set-ServiceStartupTypeOnRemotePC'
+    'Get-ServiceStartupTypeOnRemotePC'
+    'Get-ServiceStatusOnRemotePC'
+    'Find-PCbyUser'
+    'Find-PCbyUserInDescription'
+)
+
+$script:RemoteMgmtImplementations = @{}
+foreach ($functionName in $publicFunctions) {
+    $implementation = (Get-Command -Name $functionName -CommandType Function -ErrorAction Stop).ScriptBlock
+    $script:RemoteMgmtImplementations[$functionName] = $implementation
+    $parameterBlock = $implementation.Ast.ParamBlock.Extent.Text
+    $wrapperDefinition = @"
+function $functionName {
+    $parameterBlock
+    `$operationId = [guid]::NewGuid().ToString()
+    `$target = if (`$ComputerName) { `$ComputerName } elseif (`$Username) { `$Username } else { '' }
+    `$loggedParameters = [ordered]@{}
+    foreach (`$parameterName in `$PSBoundParameters.Keys) {
+        if (`$parameterName -match '(?i)password|secret|credential|token|argument|args') {
+            `$loggedParameters[`$parameterName] = '[REDACTED]'
+        }
+        else {
+            `$loggedParameters[`$parameterName] = `$PSBoundParameters[`$parameterName]
+        }
+    }
+    Write-RemoteMgmtLog -OperationId `$operationId -FunctionName '$functionName' -ComputerName `$ComputerName -Target `$target -Parameters `$loggedParameters -Status 'Started' -Message 'Operation started.'
+
+    try {
+        `$result = & (`$script:RemoteMgmtImplementations['$functionName']) @PSBoundParameters
+        if (`$result -is [bool] -and -not `$result) {
+            Write-RemoteMgmtLog -OperationId `$operationId -FunctionName '$functionName' -ComputerName `$ComputerName -Target `$target -Parameters `$loggedParameters -Status 'Failed' -Message 'Operation returned false; check the warning output for details.'
+        }
+        else {
+            Write-RemoteMgmtLog -OperationId `$operationId -FunctionName '$functionName' -ComputerName `$ComputerName -Target `$target -Parameters `$loggedParameters -Status 'Succeeded' -Message 'Operation completed.'
+        }
+        return `$result
+    }
+    catch {
+        Write-RemoteMgmtLog -OperationId `$operationId -FunctionName '$functionName' -ComputerName `$ComputerName -Target `$target -Parameters `$loggedParameters -Status 'Failed' -Message `$_.Exception.Message
+        throw
+    }
+}
+"@
+    Invoke-Expression $wrapperDefinition
+}
+
+Export-ModuleMember -Function Copy-ToRemotePC, Get-LocalAdmin, Get-LocalFile, Start-RemoteProgram, Get-WinBuild, Get-InstalledWindowsUpdate, Install-WindowsUpdateOnRemotePC, Install-WindowsUpdateFromRepositoryOnRemotePC, Start-WsusAgent, Install-MsiOnRemotePC, Find-KB-onRemotePC, Remove-AppOnRemotePC, Get-AppFromRemotePC, Disable-ServiceOnRemotePC, Start-ServiceOnRemotePC, Enable-ServiceOnRemotePC, Set-ServiceStartupTypeOnRemotePC, Get-ServiceStartupTypeOnRemotePC, Get-ServiceStatusOnRemotePC, Find-PCbyUser, Find-PCbyUserInDescription

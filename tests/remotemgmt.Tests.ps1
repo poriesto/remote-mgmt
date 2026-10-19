@@ -14,6 +14,9 @@ Describe 'remotemgmt module exports' {
             'Start-RemoteProgram'
             'Get-WinBuild'
             'Get-InstalledWindowsUpdate'
+            'Install-WindowsUpdateOnRemotePC'
+            'Install-WindowsUpdateFromRepositoryOnRemotePC'
+            'Start-WsusAgent'
             'Install-MsiOnRemotePC'
             'Find-KB-onRemotePC'
             'Remove-AppOnRemotePC'
@@ -33,6 +36,117 @@ Describe 'remotemgmt module exports' {
         foreach ($functionName in $expectedFunctions) {
             $actualFunctions | Should -Contain $functionName
         }
+    }
+}
+
+Describe 'remote operation logging' {
+    It 'logs operation start and success or failure for public functions' {
+        $originalLogPath = $env:REMOTEMGMT_LOG_PATH
+        $env:REMOTEMGMT_LOG_PATH = Join-Path $TestDrive 'remote-mgmt.jsonl'
+        Mock -ModuleName remotemgmt Invoke-Command {
+            if ($ComputerName -eq 'offline-pc') {
+                throw 'computer is unavailable'
+            }
+            [pscustomobject]@{ ProductName = 'Windows' }
+        }
+
+        try {
+            $success = Get-WinBuild -ComputerName 'pc01'
+            $failure = Get-WinBuild -ComputerName 'offline-pc'
+
+            $success.ProductName | Should -Be 'Windows'
+            $failure | Should -Be $false
+            $entries = @(Get-Content -LiteralPath $env:REMOTEMGMT_LOG_PATH | ForEach-Object { ConvertFrom-Json $_ })
+            $entries | Should -HaveCount 4
+            $entries[0].Status | Should -Be 'Started'
+            $entries[1].Status | Should -Be 'Succeeded'
+            $entries[2].Status | Should -Be 'Started'
+            $entries[3].Status | Should -Be 'Failed'
+            $entries[3].ComputerName | Should -Be 'offline-pc'
+            $entries[3].Parameters.ComputerName | Should -Be 'offline-pc'
+            $entries[2].OperationId | Should -Be $entries[3].OperationId
+        }
+        finally {
+            if ($null -eq $originalLogPath) {
+                Remove-Item Env:REMOTEMGMT_LOG_PATH -ErrorAction SilentlyContinue
+            }
+            else {
+                $env:REMOTEMGMT_LOG_PATH = $originalLogPath
+            }
+        }
+    }
+}
+
+Describe 'Install-WindowsUpdateOnRemotePC' {
+    It 'copies a local MSU file and installs it remotely' {
+        Mock -ModuleName remotemgmt Test-Path { $true }
+        Mock -ModuleName remotemgmt Copy-Item {}
+        Mock -ModuleName remotemgmt Invoke-Command {}
+
+        $result = Install-WindowsUpdateOnRemotePC -ComputerName 'pc01' -UpdatePath 'C:\Updates\fix.msu'
+
+        $result | Should -Be $true
+        Should -Invoke -CommandName Copy-Item -ModuleName remotemgmt -Times 1 -Exactly -ParameterFilter {
+            $LiteralPath -eq 'C:\Updates\fix.msu' -and
+            $Destination -match '^\\\\pc01\\C\$\\Windows\\Temp\\[0-9a-f]{32}_fix\.msu$'
+        }
+        Should -Invoke -CommandName Invoke-Command -ModuleName remotemgmt -Times 1 -Exactly -ParameterFilter {
+            $ComputerName -eq 'pc01' -and $ErrorAction -eq 'Stop'
+        }
+    }
+
+    It 'does not copy or install when the update file is missing' {
+        Mock -ModuleName remotemgmt Test-Path { $false }
+        Mock -ModuleName remotemgmt Copy-Item {}
+        Mock -ModuleName remotemgmt Invoke-Command {}
+
+        $result = Install-WindowsUpdateOnRemotePC -ComputerName 'pc01' -UpdatePath 'C:\Updates\missing.msu'
+
+        $result | Should -Be $false
+        Should -Invoke -CommandName Copy-Item -ModuleName remotemgmt -Times 0 -Exactly
+        Should -Invoke -CommandName Invoke-Command -ModuleName remotemgmt -Times 0 -Exactly
+    }
+}
+
+Describe 'Install-WindowsUpdateFromRepositoryOnRemotePC' {
+    It 'copies the update from the repository and installs it remotely' {
+        Mock -ModuleName remotemgmt Test-Path { $true }
+        Mock -ModuleName remotemgmt Copy-Item {}
+        Mock -ModuleName remotemgmt Invoke-Command {}
+
+        $result = Install-WindowsUpdateFromRepositoryOnRemotePC `
+            -ComputerName 'pc01' `
+            -RepositoryPath '\\fileserver\Updates\fix.msu'
+
+        $result | Should -Be $true
+        Should -Invoke -CommandName Copy-Item -ModuleName remotemgmt -Times 1 -Exactly -ParameterFilter {
+            $LiteralPath -eq '\\fileserver\Updates\fix.msu' -and
+            $Destination -match '^\\\\pc01\\C\$\\Windows\\Temp\\[0-9a-f]{32}_fix\.msu$'
+        }
+        Should -Invoke -CommandName Invoke-Command -ModuleName remotemgmt -Times 1 -Exactly -ParameterFilter {
+            $ComputerName -eq 'pc01' -and $ErrorAction -eq 'Stop'
+        }
+    }
+}
+
+Describe 'Start-WsusAgent' {
+    It 'starts the WSUS update scan remotely' {
+        Mock -ModuleName remotemgmt Invoke-Command {}
+
+        $result = Start-WsusAgent -ComputerName 'pc01'
+
+        $result | Should -Be $true
+        Should -Invoke -CommandName Invoke-Command -ModuleName remotemgmt -Times 1 -Exactly -ParameterFilter {
+            $ComputerName -eq 'pc01' -and $ErrorAction -eq 'Stop'
+        }
+    }
+
+    It 'returns false when the remote WSUS scan cannot be started' {
+        Mock -ModuleName remotemgmt Invoke-Command { throw 'remote failure' }
+
+        $result = Start-WsusAgent -ComputerName 'pc01'
+
+        $result | Should -Be $false
     }
 }
 

@@ -2,29 +2,32 @@
 
 ## Описание проекта
 
-`remote-mgmt` — это модуль PowerShell для удалённого управления компьютерами и серверами в доменной инфраструктуре Active Directory. Он предназначен для системных администраторов, которым необходимо быстро и безопасно выполнять типовые операции на удалённых рабочих станциях и серверах без необходимости заходить на каждую машину вручную.
+`remote-mgmt` — это модуль PowerShell для удалённого управления компьютерами и серверами в доменной инфраструктуре Active Directory. Он предназначен для системных администраторов, которым необходимо выполнять типовые операции на удалённых рабочих станциях и серверах без необходимости заходить на каждую машину вручную.
 
-Модуль позволяет получать информацию о состоянии системы, управлять установленными программами, службами, обновлениями и файлами, а также выполнять массовые административные действия в сети Windows.
+Модуль позволяет получать сведения о системе, управлять установленными программами и службами, запускать поиск обновлений через WSUS и работать с файлами на отдельных удалённых компьютерах.
 
 ## Основные возможности
 
 - удалённая установка и удаление приложений;
-- поиск и просмотр установленных обновлений и патчей KB;
+- установка автономных MSU-обновлений с локального компьютера или из централизованного хранилища;
+- просмотр подходящих под заданные фильтры пакетов обновлений и поиск установленного патча KB;
 - запуск и управление службами на удалённых машинах;
 - получение сведений о версии Windows и сборке ОС;
 - копирование файлов на удалённый компьютер;
-- просмотр локальных администраторов и файлов;
+- просмотр локальных администраторов и сведений о версии указанного файла;
 - запуск программ на удалённой машине;
 - поиск компьютера по имени пользователя через атрибут `LastLogonUser` или поле `Description` объекта компьютера;
-- работа с WSUS-агентом и служебными задачами обновлений.
+- инициирование поиска обновлений через клиент Windows Update на удалённом компьютере.
 
 ## Ключевые функции модуля
 
 - `Remove-AppOnRemotePC`
 - `Find-KB-onRemotePC`
 - `Get-InstalledWindowsUpdate`
+- `Install-WindowsUpdateOnRemotePC`
+- `Install-WindowsUpdateFromRepositoryOnRemotePC`
 - `Install-MsiOnRemotePC`
-- `Start-WsusAgentUpdate`
+- `Start-WsusAgent`
 - `Get-WinBuild`
 - `Copy-ToRemotePC`
 - `Get-LocalAdmin`
@@ -56,9 +59,27 @@ Get-WinBuild -ComputerName PC01
 Get-LocalAdmin -ComputerName PC01
 Copy-ToRemotePC -ComputerName PC01 -SourcePath "C:\Temp\setup.msi" -RemotePath "C$\Temp"
 Start-ServiceOnRemotePC -ComputerName PC01 -ServiceName "wuauserv"
+Start-WsusAgent -ComputerName PC01
+Install-WindowsUpdateOnRemotePC -ComputerName PC01 -UpdatePath "C:\Updates\windows-update.msu"
+Install-WindowsUpdateFromRepositoryOnRemotePC -ComputerName PC01 -RepositoryPath "\\fileserver\Updates\windows-update.msu"
 Find-PCbyUser -Username "ivanov" # ищет по атрибуту LastLogonUser
 Find-PCbyUserInDescription -Username "ivanov" # ищет "ivanov" в поле Description компьютера в Active Directory
 ```
+
+Для обеих функций используется файл формата `.msu`. Файл копируется в `C:\Windows\Temp` целевого компьютера, устанавливается через `wusa.exe` в тихом режиме, после чего временная копия удаляется. При установке из хранилища путь к файлу должен быть доступен компьютеру, с которого запускается команда. Нужны права на запись в административную шару `C$` целевой машины и доступ к ней по сети.
+
+## Журнал операций
+
+Все публичные функции модуля записывают JSON Lines-журнал: начало операции и её итог (`Succeeded` или `Failed`), UTC-время, имя функции, целевой компьютер, параметры вызова и идентификатор операции. Аргументы, которые могут содержать секреты (например `ArgumentList` или `MsiArgs`), в журнале заменяются на `[REDACTED]`. Неудачные вызовы, в том числе недоступные компьютеры, можно выбрать для последующей обработки:
+
+```powershell
+Get-Content "$env:ProgramData\RemoteMgmt\remote-mgmt.jsonl" |
+    ForEach-Object { ConvertFrom-Json $_ } |
+    Where-Object Status -eq 'Failed' |
+    Select-Object TimestampUtc, ComputerName, Function, OperationId, Message
+```
+
+По умолчанию журнал хранится в `%ProgramData%\RemoteMgmt\remote-mgmt.jsonl`. Чтобы указать другой путь, задайте переменную окружения `REMOTEMGMT_LOG_PATH` до запуска команд модуля. При ошибке записи журналирования функция выдаёт предупреждение; сама операция при этом продолжается.
 
 ## Назначение проекта
 
