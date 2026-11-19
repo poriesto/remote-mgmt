@@ -26,6 +26,11 @@
     Get-ServiceStatusOnRemotePC - получает статус службы на удаленном компьютере
     Find-PCbyUser - ищет компьютер по атрибуту LastLogonUser в Active Directory
     Find-PCbyUserInDescription - ищет компьютер по имени пользователя в поле Description объекта Active Directory
+    Fix-Winrm - исправляет ошибки в работе WinRM на удаленном компьютере
+    Disable-WindowsFirewallOnRemotePC - отключает брандмауэр Windows на удаленном компьютере
+    Enable-WindowsFirewallOnRemotePC - включает брандмауэр Windows на удаленном компьютере
+    Enable-RemoteRegistryOnRemotePC - включает службу удаленного реестра на удаленном компьютере
+    Disable-RemoteRegistryOnRemotePC - отключает службу удаленного реестра на удаленном компьютере
 
 .NOTES
     Совместимость: Windows PowerShell 5.1, PowerShell 7+.
@@ -546,6 +551,96 @@ function Write-RemoteMgmtLog {
         Write-Warning "Не удалось записать журнал remote-mgmt: $_"
     }
 }
+function Repair-Winrm {
+    param (
+        [string]$ComputerName
+    )
+    try {
+        Invoke-Command -ComputerName $ComputerName -ScriptBlock {
+            winrm quickconfig -q
+            winrm set winrm/config/service/auth @{Basic="true"}
+            winrm set winrm/config/service @{AllowUnencrypted="true"}
+            netsh advfirewall firewall add rule name="WinRM" dir=in action=allow protocol=TCP localport=5985
+        } -ErrorAction Stop
+        return $true
+    }
+    catch {
+        Write-Warning "Ошибка при исправлении WinRM на компьютере $ComputerName : $_"
+        return $false
+    }
+}
+function Disable-WindowsFirewallOnRemotePC {
+    param (
+        [string]$ComputerName
+    )
+    try {
+        Invoke-Command -ComputerName $ComputerName -ScriptBlock {
+            Set-NetFirewallProfile -Profile Domain,Public,Private -Enabled False
+        } -ErrorAction Stop
+        return $true
+    }
+    catch {
+        Write-Warning "Ошибка при отключении брандмауэра Windows на компьютере $ComputerName : $_"
+        return $false
+    }
+}
+function Enable-WindowsFirewallOnRemotePC {
+    param (
+        [string]$ComputerName
+    )
+    try {
+        Invoke-Command -ComputerName $ComputerName -ScriptBlock {
+            Set-NetFirewallProfile -Profile Domain,Public,Private -Enabled True
+        } -ErrorAction Stop
+        return $true
+    }
+    catch {
+        Write-Warning "Ошибка при включении брандмауэра Windows на компьютере $ComputerName : $_"
+        return $false
+    }
+}
+function Enable-RemoteRegistryOnRemotePC {
+    param (
+        [string]$ComputerName
+    )
+    try {
+        Invoke-Command -ComputerName $ComputerName -ScriptBlock {
+            Set-Service -Name RemoteRegistry -StartupType Manual
+            Start-Service -Name RemoteRegistry
+        } -ErrorAction Stop
+        return $true
+    }
+    catch {
+        Write-Warning "Ошибка при включении службы удаленного реестра на компьютере $ComputerName : $_"
+        return $false
+    }
+}
+function Disable-RemoteRegistryOnRemotePC {
+    param (
+        [string]$ComputerName
+    )
+    try {
+        Invoke-Command -ComputerName $ComputerName -ScriptBlock {
+            Stop-Service -Name RemoteRegistry
+            Set-Service -Name RemoteRegistry -StartupType Disabled
+        } -ErrorAction Stop
+        return $true
+    }
+    catch {
+        Write-Warning "Ошибка при отключении службы удаленного реестра на компьютере $ComputerName : $_"
+        return $false
+    }
+}
+
+if (-not (Get-Command -Name Get-ADComputer -ErrorAction SilentlyContinue)) {
+    function Get-ADComputer {
+        param(
+            [string[]]$Filter,
+            [string[]]$Properties
+        )
+        throw 'Get-ADComputer is unavailable. Install and import the ActiveDirectory module.'
+    }
+}
 
 $publicFunctions = @(
     'Copy-ToRemotePC'
@@ -569,13 +664,27 @@ $publicFunctions = @(
     'Get-ServiceStatusOnRemotePC'
     'Find-PCbyUser'
     'Find-PCbyUserInDescription'
+    'Repair-Winrm'
+    'Enable-RemoteRegistryOnRemotePC'
+    'Disable-RemoteRegistryOnRemotePC'
+    'Enable-WindowsFirewallOnRemotePC'
+    'Disable-WindowsFirewallOnRemotePC'
 )
 
 $script:RemoteMgmtImplementations = @{}
+$moduleAst = [System.Management.Automation.Language.Parser]::ParseFile(
+    $MyInvocation.MyCommand.Path,
+    [ref]$null,
+    [ref]$null
+)
 foreach ($functionName in $publicFunctions) {
     $implementation = (Get-Command -Name $functionName -CommandType Function -ErrorAction Stop).ScriptBlock
     $script:RemoteMgmtImplementations[$functionName] = $implementation
-    $parameterBlock = $implementation.Ast.ParamBlock.Extent.Text
+    $sourceFunction = $moduleAst.Find(
+        { param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $functionName },
+        $true
+    )
+    $parameterBlock = $sourceFunction.Body.ParamBlock.Extent.Text
     $wrapperDefinition = @"
 function $functionName {
     $parameterBlock
@@ -611,4 +720,4 @@ function $functionName {
     Invoke-Expression $wrapperDefinition
 }
 
-Export-ModuleMember -Function Copy-ToRemotePC, Get-LocalAdmin, Get-LocalFile, Start-RemoteProgram, Get-WinBuild, Get-InstalledWindowsUpdate, Install-WindowsUpdateOnRemotePC, Install-WindowsUpdateFromRepositoryOnRemotePC, Start-WsusAgent, Install-MsiOnRemotePC, Find-KB-onRemotePC, Remove-AppOnRemotePC, Get-AppFromRemotePC, Disable-ServiceOnRemotePC, Start-ServiceOnRemotePC, Enable-ServiceOnRemotePC, Set-ServiceStartupTypeOnRemotePC, Get-ServiceStartupTypeOnRemotePC, Get-ServiceStatusOnRemotePC, Find-PCbyUser, Find-PCbyUserInDescription
+Export-ModuleMember -Function Copy-ToRemotePC, Get-LocalAdmin, Get-LocalFile, Start-RemoteProgram, Get-WinBuild, Get-InstalledWindowsUpdate, Install-WindowsUpdateOnRemotePC, Install-WindowsUpdateFromRepositoryOnRemotePC, Start-WsusAgent, Install-MsiOnRemotePC, Find-KB-onRemotePC, Remove-AppOnRemotePC, Get-AppFromRemotePC, Disable-ServiceOnRemotePC, Start-ServiceOnRemotePC, Enable-ServiceOnRemotePC, Set-ServiceStartupTypeOnRemotePC, Get-ServiceStartupTypeOnRemotePC, Get-ServiceStatusOnRemotePC, Find-PCbyUser, Find-PCbyUserInDescription, Repair-Winrm, Disable-WindowsFirewallOnRemotePC, Enable-WindowsFirewallOnRemotePC, Enable-RemoteRegistryOnRemotePC, Disable-RemoteRegistryOnRemotePC

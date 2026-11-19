@@ -9,6 +9,7 @@
 ## Основные возможности
 
 - удалённая установка и удаление приложений;
+- установка MSI-пакетов на удалённый компьютер;
 - установка автономных MSU-обновлений с локального компьютера или из централизованного хранилища;
 - просмотр подходящих под заданные фильтры пакетов обновлений и поиск установленного патча KB;
 - запуск и управление службами на удалённых машинах;
@@ -18,6 +19,8 @@
 - запуск программ на удалённой машине;
 - поиск компьютера по имени пользователя через атрибут `LastLogonUser` или поле `Description` объекта компьютера;
 - инициирование поиска обновлений через клиент Windows Update на удалённом компьютере.
+- настройка WinRM и удалённого реестра;
+- включение и отключение брандмауэра Windows на удалённых компьютерах.
 
 ## Ключевые функции модуля
 
@@ -42,13 +45,26 @@
 - `Get-ServiceStatusOnRemotePC`
 - `Find-PCbyUser`
 - `Find-PCbyUserInDescription`
+- `Repair-Winrm`
+- `Disable-WindowsFirewallOnRemotePC`
+- `Enable-WindowsFirewallOnRemotePC`
+- `Enable-RemoteRegistryOnRemotePC`
+- `Disable-RemoteRegistryOnRemotePC`
 
 ## Требования
 
 - Windows PowerShell 5.1 или PowerShell 7+
 - доступ к управляемым компьютерам в домене;
 - включённый удалённый доступ к узлам (`WinRM` / PowerShell Remoting);
-- права администратора или необходимые разрешения на целевых машинах.
+- права администратора или необходимые разрешения на целевых машинах;
+- модуль Active Directory, если используются функции поиска компьютеров или сценарий пакетного запуска проверки WSUS;
+- административные права на целевых компьютерах для операций настройки системы и управления службами.
+
+Модуль и вспомогательный сценарий рассчитаны на выполнение с Windows-компьютера в доменной среде. Для функций поиска в Active Directory предварительно импортируйте модуль:
+
+```powershell
+Import-Module ActiveDirectory
+```
 
 ## Пример использования
 
@@ -64,9 +80,32 @@ Install-WindowsUpdateOnRemotePC -ComputerName PC01 -UpdatePath "C:\Updates\windo
 Install-WindowsUpdateFromRepositoryOnRemotePC -ComputerName PC01 -RepositoryPath "\\fileserver\Updates\windows-update.msu"
 Find-PCbyUser -Username "ivanov" # ищет по атрибуту LastLogonUser
 Find-PCbyUserInDescription -Username "ivanov" # ищет "ivanov" в поле Description компьютера в Active Directory
+Install-MsiOnRemotePC -ComputerName PC01 -MsiPath "C:\Packages\app.msi" -MsiArgs "/quiet"
+Repair-Winrm -ComputerName PC01
+Disable-WindowsFirewallOnRemotePC -ComputerName PC01
+Enable-WindowsFirewallOnRemotePC -ComputerName PC01
+Enable-RemoteRegistryOnRemotePC -ComputerName PC01
+Disable-RemoteRegistryOnRemotePC -ComputerName PC01
 ```
 
 Для обеих функций используется файл формата `.msu`. Файл копируется в `C:\Windows\Temp` целевого компьютера, устанавливается через `wusa.exe` в тихом режиме, после чего временная копия удаляется. При установке из хранилища путь к файлу должен быть доступен компьютеру, с которого запускается команда. Нужны права на запись в административную шару `C$` целевой машины и доступ к ней по сети.
+
+## Пакетный запуск проверки WSUS
+
+В репозитории есть интерактивный сценарий `ForceWsusClientScanUpdates.ps1`. Он запускает поиск обновлений через модуль `remotemgmt` для списка компьютеров из файла, выбранной группы Active Directory или всего домена.
+
+```powershell
+Import-Module ActiveDirectory
+.\ForceWsusClientScanUpdates.ps1
+```
+
+Можно заранее задать файл журнала:
+
+```powershell
+.\ForceWsusClientScanUpdates.ps1 -LogPath "C:\Logs\remote-mgmt.jsonl"
+```
+
+Сценарий выводит итоговое число успешно обработанных компьютеров и ошибок. Для выбора группы в пункте меню 2 должна быть настроена корректная SearchBase для домена и OU с группами.
 
 ## Журнал операций
 

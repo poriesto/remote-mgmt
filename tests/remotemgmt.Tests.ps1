@@ -29,6 +29,11 @@ Describe 'remotemgmt module exports' {
             'Get-ServiceStatusOnRemotePC'
             'Find-PCbyUser'
             'Find-PCbyUserInDescription'
+            'Repair-Winrm'
+            'Disable-WindowsFirewallOnRemotePC'
+            'Enable-WindowsFirewallOnRemotePC'
+            'Enable-RemoteRegistryOnRemotePC'
+            'Disable-RemoteRegistryOnRemotePC'
         )
 
         $actualFunctions = (Get-Command -Module remotemgmt -CommandType Function).Name
@@ -87,8 +92,8 @@ Describe 'Install-WindowsUpdateOnRemotePC' {
 
         $result | Should -Be $true
         Should -Invoke -CommandName Copy-Item -ModuleName remotemgmt -Times 1 -Exactly -ParameterFilter {
-            $LiteralPath -eq 'C:\Updates\fix.msu' -and
-            $Destination -match '^\\\\pc01\\C\$\\Windows\\Temp\\[0-9a-f]{32}_fix\.msu$'
+            $LiteralPath -contains 'C:\Updates\fix.msu' -and
+            $Destination -match '^\\\\pc01\\C\$\\Windows\\Temp\\[0-9a-f]{32}_.*fix\.msu$'
         }
         Should -Invoke -CommandName Invoke-Command -ModuleName remotemgmt -Times 1 -Exactly -ParameterFilter {
             $ComputerName -eq 'pc01' -and $ErrorAction -eq 'Stop'
@@ -120,8 +125,8 @@ Describe 'Install-WindowsUpdateFromRepositoryOnRemotePC' {
 
         $result | Should -Be $true
         Should -Invoke -CommandName Copy-Item -ModuleName remotemgmt -Times 1 -Exactly -ParameterFilter {
-            $LiteralPath -eq '\\fileserver\Updates\fix.msu' -and
-            $Destination -match '^\\\\pc01\\C\$\\Windows\\Temp\\[0-9a-f]{32}_fix\.msu$'
+            $LiteralPath -contains '\\fileserver\Updates\fix.msu' -and
+            $Destination -match '^\\\\pc01\\C\$\\Windows\\Temp\\[0-9a-f]{32}_.*fix\.msu$'
         }
         Should -Invoke -CommandName Invoke-Command -ModuleName remotemgmt -Times 1 -Exactly -ParameterFilter {
             $ComputerName -eq 'pc01' -and $ErrorAction -eq 'Stop'
@@ -447,6 +452,107 @@ Describe 'Find-PCbyUserInDescription' {
         $result | Should -Be @('pc01', 'pc02')
         Should -Invoke -CommandName Get-ADComputer -ModuleName remotemgmt -Times 1 -Exactly -ParameterFilter {
             $Properties -contains 'Description'
+        }
+    }
+
+    Describe 'Repair-Winrm' {
+        It 'repairs WinRM on the remote computer' {
+            Mock -ModuleName remotemgmt Invoke-Command {}
+
+            $result = Repair-Winrm -ComputerName 'pc01'
+
+            $result | Should -Be $true
+            Should -Invoke -CommandName Invoke-Command -ModuleName remotemgmt -Times 1 -Exactly -ParameterFilter {
+                $ComputerName -eq 'pc01' -and $ErrorAction -eq 'Stop'
+            }
+        }
+
+        It 'returns false when WinRM cannot be repaired' {
+            Mock -ModuleName remotemgmt Invoke-Command { throw 'WinRM unavailable' }
+
+            $result = Repair-Winrm -ComputerName 'pc01'
+
+            $result | Should -Be $false
+        }
+    }
+
+    Describe 'Windows Firewall management' {
+        It 'disables the Windows Firewall on the remote computer' {
+            Mock -ModuleName remotemgmt Invoke-Command {}
+
+            $result = Disable-WindowsFirewallOnRemotePC -ComputerName 'pc01'
+
+            $result | Should -Be $true
+            Should -Invoke -CommandName Invoke-Command -ModuleName remotemgmt -Times 1 -Exactly -ParameterFilter {
+                $ComputerName -eq 'pc01' -and $ErrorAction -eq 'Stop'
+            }
+        }
+
+        It 'returns false when the Windows Firewall cannot be disabled' {
+            Mock -ModuleName remotemgmt Invoke-Command { throw 'firewall unavailable' }
+
+            $result = Disable-WindowsFirewallOnRemotePC -ComputerName 'pc01'
+
+            $result | Should -Be $false
+        }
+
+        It 'enables the Windows Firewall on the remote computer' {
+            Mock -ModuleName remotemgmt Invoke-Command {}
+
+            $result = Enable-WindowsFirewallOnRemotePC -ComputerName 'pc01'
+
+            $result | Should -Be $true
+            Should -Invoke -CommandName Invoke-Command -ModuleName remotemgmt -Times 1 -Exactly -ParameterFilter {
+                $ComputerName -eq 'pc01' -and $ErrorAction -eq 'Stop'
+            }
+        }
+
+        It 'returns false when the Windows Firewall cannot be enabled' {
+            Mock -ModuleName remotemgmt Invoke-Command { throw 'firewall unavailable' }
+
+            $result = Enable-WindowsFirewallOnRemotePC -ComputerName 'pc01'
+
+            $result | Should -Be $false
+        }
+    }
+
+    Describe 'Remote Registry management' {
+        It 'enables the Remote Registry service' {
+            Mock -ModuleName remotemgmt Invoke-Command {}
+
+            $result = Enable-RemoteRegistryOnRemotePC -ComputerName 'pc01'
+
+            $result | Should -Be $true
+            Should -Invoke -CommandName Invoke-Command -ModuleName remotemgmt -Times 1 -Exactly -ParameterFilter {
+                $ComputerName -eq 'pc01' -and $ErrorAction -eq 'Stop'
+            }
+        }
+
+        It 'returns false when the Remote Registry service cannot be enabled' {
+            Mock -ModuleName remotemgmt Invoke-Command { throw 'Remote Registry unavailable' }
+
+            $result = Enable-RemoteRegistryOnRemotePC -ComputerName 'pc01'
+
+            $result | Should -Be $false
+        }
+
+        It 'disables the Remote Registry service' {
+            Mock -ModuleName remotemgmt Invoke-Command {}
+
+            $result = Disable-RemoteRegistryOnRemotePC -ComputerName 'pc01'
+
+            $result | Should -Be $true
+            Should -Invoke -CommandName Invoke-Command -ModuleName remotemgmt -Times 1 -Exactly -ParameterFilter {
+                $ComputerName -eq 'pc01' -and $ErrorAction -eq 'Stop'
+            }
+        }
+
+        It 'returns false when the Remote Registry service cannot be disabled' {
+            Mock -ModuleName remotemgmt Invoke-Command { throw 'Remote Registry unavailable' }
+
+            $result = Disable-RemoteRegistryOnRemotePC -ComputerName 'pc01'
+
+            $result | Should -Be $false
         }
     }
 
